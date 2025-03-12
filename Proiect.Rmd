@@ -1,0 +1,248 @@
+---
+title: "Proiect"
+author: "Miricel Daniel-Mihai"
+date: "2024-03-01"
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_knit$set(root.dir = "C:/Users/miric_u4cfdbo/OneDrive/Desktop/facultate/AMD/Proiect")
+
+# Set a CRAN mirror
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+# List of packages to install
+pacheteBDSA <- c("knitr", "rmarkdown", "RColorBrewer", "scales", 
+                 "tidyverse","dplyr", "plyr", "ggplot2", "gganimate", "Rmisc", 
+                 "Hmisc","randomForest", "rattle", "rpart.plot", "caret", 
+                 "gmodels", "PresenceAbsence", 
+                 "ROCR", "ca", "plotROC", "ROSE", 
+                 "devtools","rpart", "readxl", "ellipsis","gridExtra"  
+)
+
+# Install packages
+install.packages(pacheteBDSA, dependencies = TRUE)
+
+# Load packages
+sapply(pacheteBDSA, library, character.only = TRUE)
+
+```
+
+## PROIECT
+
+#PARTEA 1 - ANALIZA CORESPONDENTELOR
+
+Am ales ca variabile varsta (Age) si parerea despre uneltele AI (AI Tool Sentiment)
+
+```{r}
+Data2023 <- read.csv("survey_results_public.csv", header=TRUE, sep=",")
+Data2023$Age1 <- factor(Data2023$Age, 
+                          labels=c("18-24","25-34","35-44","45-54","55-64","65+","NA","0-18"))
+
+Data2023 %>%
+  filter(!is.na(AISent)) %>%
+  group_by(AISent, Age1) %>%
+  dplyr::summarise(n = n()) %>%
+  mutate(freq = n / sum(n)) %>%
+  ggplot() +
+  geom_col(aes(x = reorder(Age1, n), y = n, fill = AISent)) +
+  labs(x = "Age Groups") +
+  scale_fill_brewer(palette = "Set2")
+
+m1_ac <- table(Data2023$AISent, Data2023$Age)
+corespondente_AISent_Age <- ca(m1_ac)
+plot(corespondente_AISent_Age, lines = c(FALSE, FALSE), 
+     main = "Correspondence Analysis - AISent and Age")
+
+```
+
+#PARTEA 2 - Regresie logistica
+
+Variabila target este folosirea uneltelor AI
+Aceasta reprezinta raspunsul la intrebarea "În prezent, utilizați instrumente AI în procesul de dezvoltare?"
+Categoriile initiale de raspuns erau : "Da", "Nu, dar plănuiesc să o fac în curând", "Nu, și nu am de gând să o fac"
+Am combinat ultimele doua categorii intr-una singura: "Nu"
+
+
+
+
+```{r}
+Data2023 <- Data2023 %>%
+  mutate(AISelect1 = as.factor(case_when(
+    AISelect == "Yes" ~ 1,
+    TRUE ~ 0
+  )))
+Data2023 <- Data2023 %>%
+  mutate(YearsCodePro1 = as.numeric(case_when(YearsCodePro == "Less than 1 year"  ~ "0.5",
+                                              YearsCodePro == "More than 50 years"  ~ "51",
+                                              is.na(YearsCodePro) == TRUE ~ "0",
+                                              TRUE ~ YearsCodePro)))
+Data2023 <- Data2023 %>% 
+  mutate(YearsCodePro2 = as.factor(case_when(YearsCodePro1 <= 5  ~ "0-5",
+                                             YearsCodePro1 <= 10 ~ "6-10",
+                                             YearsCodePro1 <= 15 ~ "11-15",
+                                             YearsCodePro1 <= 20 ~ "16-20",
+                                             YearsCodePro1 > 20  ~ "21+")))
+Data2023$RemoteWork1 <- factor(Data2023$RemoteWork, 
+                        labels=c("H","P","R"))
+
+Data2023na <- Data2023 %>% 
+  filter(!is.na(Age1), 
+         !is.na(YearsCodePro2), 
+         !is.na(RemoteWork1),
+         !is.na(AISelect1))
+
+options(scipen = 999)
+
+model1 <- glm(AISelect1 ~ Age1 + YearsCodePro2 + RemoteWork1,
+              data = Data2023na,
+              family = "binomial")
+
+exp(coef(model1))
+
+```
+
+#INTERPRETARE COEFICIENTI
+
+Age - Categorie de referinta este 18-24
+
+Cei sub 18 ani au sanse cu 66% mai mari de a folosi unelte AI
+
+Categoria 25-34 => sanse cu 29% mai mici
+
+Categoria 35-44 => sanse cu 40% mai mici
+
+Categoria 45-54 => sanse cu 52% mai mici
+
+Categoria 55-64 => sanse cu 66% mai mici
+
+Categoria 65+ => sanse cu 75% mai mici
+
+YearsCodePro - Categoria de referinta este 0-5
+
+Categoria 6-10 => Sanse cu 25% mai mici
+
+Categoria 11-15 => Sanse cu 28% mai mici
+
+Categoria 16-20 => Sanse cu 34% mai mici
+
+Categoria 21+ => Sanse cu 33% mai mici
+
+RemoteWork - Categoria de referinta este H
+
+Categoria P => Sanse cu 10% mai mici
+
+Categoria R => Sanse cu 23% mai mari
+
+```{r}
+
+pred1 <- predict(model1, type = "response")
+pred1[1:5] #predictii pentru a contrui curba ROC
+
+y_act1 <- Data2023na$AISelect1
+
+library(pROC)
+roc_curve <- roc(y_act1, pred1)
+
+plot(roc_curve, main = "ROC Curve")
+
+optimal_threshold <- coords(roc_curve, "best", ret = "threshold")
+optimal_threshold
+
+y_pred_num1 <- ifelse(pred1 > 0.4259456, 1, 0)
+table(y_pred_num1)
+
+pred <- prediction(pred1,y_act1)
+
+
+# pred (Curba ROC)
+pred %>% 
+  performance(measure = "tpr", x.measure = "fpr") %>% 
+  plot(colorize = T, lwd = 7)
+y_pred1 <- factor(y_pred_num1, labels = c(0, 1))
+caret::confusionMatrix(data = y_pred1, as.factor(y_act1))
+
+```
+
+Valoarea optima pe baza curbei ROC este 0.4259456
+Modelul are o acuratete de 0.5772 
+
+#Partea 3 - Arbore de clasificare
+
+```{r}
+# Train / Test split
+# Total number of rows in the data frame
+n <- nrow(Data2023na)
+n
+
+# Definim nr de randuri pt training set (80% din data set)
+n_train <- round(0.80 * n)
+n_train
+n_train/n
+
+# Set a random seed for reproducibility
+set.seed(1234)
+
+# Construire vector de indici care sa reprezinte 80% din esantionul aleator
+
+train_indices <- sample(1:n, n_train)
+
+# Subset the data frame to training indices only
+date_train <- Data2023na[train_indices, ]
+
+# Exclude the training indices to create the test set
+date_test <- Data2023na[-train_indices, ]
+arbore <- rpart(AISelect1 ~ Age1 + YearsCodePro2 + RemoteWork1, 
+                data=date_train, 
+                method="class", 
+                minsplit = 2, cp=-1, minbucket = 1, maxdepth=5)
+
+printcp(arbore)
+plotcp(arbore)
+
+arboref <- prune(arbore, cp=0.000175630)
+```
+
+parametrul xerror este minim pentru cp=0.000175630
+
+```{r}
+
+# Predictii Arbore de Clasificare - TRAIN set
+DTpred_train <- predict(arboref, date_train, type = "prob")[,2]
+y_pred_num_train_DT <- ifelse(DTpred_train > 0.5, 1, 0)
+y_pred_train_DT <- factor(y_pred_num_train_DT, levels = c(0, 1))
+y_act_train <- date_train$AISelect1
+
+# Predictii Arbore de Clasificare - TEST set
+DTpred_test <- predict(arboref, date_test, type = "prob")[,2]
+y_pred_num_test_DT <- ifelse(DTpred_test > 0.5, 1, 0)
+y_pred_test_DT <- factor(y_pred_num_test_DT, levels = c(0, 1))
+y_act_test <- date_test$AISelect1
+
+pr_DT_train <- prediction(DTpred_train, date_train$AISelect1, label.ordering = NULL)
+perf_DT_train <- performance(pr_DT_train,"tpr","fpr")
+
+plot(perf_DT_train, colorize=TRUE, lwd=5)
+
+# TEST - DT
+library(ROCR)
+pr_DT_test <- prediction(DTpred_test, date_test$AISelect1, label.ordering = NULL)
+pr_DT_test
+perf_DT_test <- performance(pr_DT_test,"tpr","fpr")
+perf_DT_test
+plot(perf_DT_test, colorize=TRUE, lwd=5)
+
+AUC_DT_test = performance(pr_DT_test, measure = "auc")@y.values[[1]]
+cat("AUC - Arbore de clasificare test Set: ", AUC_DT_test, "\n")
+
+AUC_DT_train = performance(pr_DT_train, measure = "auc")@y.values[[1]]
+cat("AUC - Arbore de clasificare Train Set: ", AUC_DT_train, "\n")
+
+RFfit <- randomForest(AISelect1 ~ Age1 + YearsCodePro2 + RemoteWork1,
+                      data=date_train, ntrees=1000, maxnodes=40, type=classification)
+varImpPlot(RFfit)
+prp(arboref)
+
+```
+
+Coeficientii de importanta arata ca varsta este cel mai important factor pentru a decide daca o persoana foloseste sau nu unelte AI
